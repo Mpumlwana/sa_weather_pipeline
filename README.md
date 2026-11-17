@@ -2,19 +2,9 @@
 
 > 🚧 **Status: IN PROGRESS.** Built step by step. This file lists only what has been run and checked.
 
-Welcome! This repository is my second data engineering project: a daily pipeline that gets real weather data for South African cities from the Open-Meteo API, keeps it in bronze, silver and gold Delta tables, and proves it works with data quality checks and automated tests.
+My second data engineering project: a daily pipeline that gets real weather data for 9 South African cities from the Open-Meteo API and keeps it in bronze, silver and gold Delta tables, with data quality checks and automated tests. It never duplicates rows when it runs twice.
 
----
-
-## 👋 About This Project
-
-Weather data is public, but it arrives as raw API responses. This project turns those responses into clean, trusted tables that grow every day, and that never duplicate rows when the pipeline runs twice.
-
-For every deliverable, you will find:
-
-- 🐍 The code used to build it
-- 📊 The results, with real counts
-- 💭 A reflection covering what I learned and challenges I faced
+📖 More detail: [design decisions and full results](docs/design_decisions.md) · one reflection per deliverable in [`docs/`](docs)
 
 ---
 
@@ -22,21 +12,21 @@ For every deliverable, you will find:
 
 ```
 sa_weather_pipeline/
-│
 ├── Dockerfile            # Linux image: Python 3.12, Java, PySpark, Delta
 ├── .dockerignore         # Files Docker leaves out of the build
 ├── .gitignore            # Keeps secrets and data out of GitHub
-├── test_delta.py         # Step 0 test: write and read a Delta table
 ├── README.md             # You are here
-│
 ├── data/                 # Delta tables (not uploaded to GitHub)
-│   ├── bronze/           # Planned: raw API responses, never edited
+│   ├── bronze/           # weather_raw: raw API responses, never edited
 │   ├── silver/           # Planned: cleaned data
 │   └── gold/             # Planned: summary tables
-│
-├── src/                  # Planned: pipeline code
+├── src/
+│   ├── cities.csv        # The 9 cities, one per province
+│   ├── common.py         # Shared settings and the Spark session
+│   ├── ingest_bronze.py  # History: one month per city, from January 2025
+│   └── ingest_recent.py  # Recent days: last 21 days plus today
 ├── tests/                # Planned: automated tests
-└── docs/                 # Planned: one reflection per deliverable
+└── docs/                 # Reflections and design decisions
 ```
 
 ---
@@ -46,32 +36,30 @@ sa_weather_pipeline/
 | # | Deliverable | Status |
 |---|---|---|
 | 0 | 🧪 Feasibility test: API, Spark + Delta in Docker, design decisions | ✅ Done |
-| 1 | 📥 Ingest into bronze, unchanged (Python) | ⬜ Not Started |
+| 1 | 📥 Ingest into bronze, unchanged (Python): history plus recent days | ✅ Done |
 | 2 | 🧹 Clean into silver (PySpark, Delta) | ⬜ Not Started |
 | 3 | 🏅 Gold summary tables (PySpark, Delta) | ⬜ Not Started |
 | 4 | 🛡️ Data quality checks, tests on every push, architecture diagram | ⬜ Not Started |
 
 ---
 
-## 🔬 Results of Deliverable 0
+## 🔬 Results So Far
 
-| Question | Answer |
-|---|---|
-| Can we reach the Open-Meteo API? | ✅ Yes: the forecast and history endpoints both returned data |
-| Does it give history? | ✅ Yes: a daily request for 1 to 3 January 2025 worked |
-| Does Spark 4.2.0 with Delta 4.4.1 run on Windows? | ❌ No: Delta needs winutils.exe there |
-| Does it run in a Linux container (Docker)? | ✅ Yes: a Delta table was written and read back |
-| Does the data survive the container? | ✅ Yes: a mounted folder kept 3 Delta versions (0, 1 and 2) |
-| Does a second run duplicate rows? | ✅ No: the table kept 5 rows, and the log shows one add and one remove |
+### 🧪 Deliverable 0: Feasibility test
 
-**Design decisions so far:**
+- ✅ The Open-Meteo forecast and history endpoints both return data
+- ❌ Spark 4.2.0 with Delta 4.4.1 fails on Windows (needs winutils.exe), ✅ but works in a Linux Docker container
+- ✅ The data survives the container: a mounted folder kept 3 Delta versions
+- ✅ A second run did not duplicate rows (the table kept 5 rows)
+- 📝 [Reflection](docs/reflection_deliverable_0.md)
 
-- Spark and Delta run in a Linux container, with exact versions pinned
-- Every API call sends timezone=Africa/Johannesburg, because the default is GMT
-- Bronze keeps each API response unchanged, with an ingested_at time
-- Tests run on a saved sample, never on the real API
-- Data lives in a mounted folder outside the container, and is never uploaded to GitHub
-- Weather only for now: ZAR exchange rates are untested, so they are a later extension
+### 📥 Deliverable 1: Ingest into bronze
+
+- ✅ 198 history rows (22 months for 9 cities). A second run skipped 198 and added 0
+- ✅ Recent days from the forecast address (past_days=21): 9 rows per run. A second run on the same day added 0
+- ✅ 216 rows in bronze (198 history and 18 forecast), raw JSON stored unchanged
+- ✅ For Cape Town, 4 of 5 overlapping days matched exactly between the two sources and 1 differed by 0.1 degrees
+- 📝 [Reflection](docs/reflection_deliverable_1.md) · [Full results and decisions](docs/design_decisions.md)
 
 ---
 
@@ -93,18 +81,22 @@ Planned, not built yet: `pytest` · GitHub Actions
    ```powershell
    docker build -t sa-weather-pipeline .
    ```
-3. Run the Delta test (writes a table into data\mount_test, which Git ignores):
+3. Load the history (writes to data\bronze\weather_raw, which Git ignores):
    ```powershell
-   docker run --rm -v C:\projects\sa_weather_pipeline:/app -v C:\projects\sa_weather_pipeline\data\mount_test:/app/delta_test sa-weather-pipeline python test_delta.py
+   docker run --rm -v C:\projects\sa_weather_pipeline:/app -v sa-ivy-cache:/root/.ivy2.5.2 sa-weather-pipeline python src/ingest_bronze.py
    ```
+4. Load the recent days (last 21 days plus today):
+   ```powershell
+   docker run --rm -v C:\projects\sa_weather_pipeline:/app -v sa-ivy-cache:/root/.ivy2.5.2 sa-weather-pipeline python src/ingest_recent.py
+   ```
+
+Running either command twice on the same day adds nothing.
 
 ---
 
 ## 📊 Data Source
 
-**Source:** [Open-Meteo](https://open-meteo.com/)
-
-The free API is for non-commercial use, with fewer than 10,000 calls per day, under the CC BY 4.0 licence. Weather data by [Open-Meteo.com](https://open-meteo.com/).
+**Source:** [Open-Meteo](https://open-meteo.com/). The free API is for non-commercial use, with fewer than 10,000 calls per day, under the CC BY 4.0 licence. Weather data by [Open-Meteo.com](https://open-meteo.com/).
 
 ---
 
